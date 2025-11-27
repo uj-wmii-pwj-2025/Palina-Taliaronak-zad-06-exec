@@ -2,10 +2,9 @@ package uj.wmii.pwj.exec;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -18,6 +17,7 @@ public class ExecServiceTest {
         s.execute(r);
         doSleep(10);
         assertTrue(r.wasRun);
+        s.shutdown();
     }
 
     @Test
@@ -27,6 +27,7 @@ public class ExecServiceTest {
         s.submit(r);
         doSleep(10);
         assertTrue(r.wasRun);
+        s.shutdown();
     }
 
     @Test
@@ -39,6 +40,7 @@ public class ExecServiceTest {
         assertTrue(r.wasRun);
         assertTrue(f.isDone());
         assertEquals(expected, f.get());
+        s.shutdown();
     }
 
     @Test
@@ -49,6 +51,7 @@ public class ExecServiceTest {
         doSleep(20);
         assertTrue(f.isDone());
         assertEquals("X", f.get());
+        s.shutdown();
     }
 
     @Test
@@ -58,8 +61,84 @@ public class ExecServiceTest {
         doSleep(10);
         s.shutdown();
         assertThrows(
-            RejectedExecutionException.class,
-            () -> s.submit(new TestRunnable()));
+                RejectedExecutionException.class,
+                () -> s.submit(new TestRunnable()));
+    }
+
+    @Test
+    void testShutdownNow() {
+        MyExecService s = MyExecService.newInstance();
+        TestRunnable r1 = new TestRunnable();
+        TestRunnable r2 = new TestRunnable();
+        s.execute(r1);
+        s.execute(r2);
+        List<Runnable> notExecuted = s.shutdownNow();
+        assertTrue(notExecuted.size() >= 1);
+        assertTrue(s.isShutdown());
+    }
+
+    @Test
+    void testInvokeAll() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+        List<Callable<String>> tasks = List.of(
+                new StringCallable("A", 5),
+                new StringCallable("B", 5),
+                new StringCallable("C", 5)
+        );
+
+        List<Future<String>> futures = s.invokeAll(tasks);
+        doSleep(20);
+
+        assertEquals(3, futures.size());
+        assertTrue(futures.get(0).isDone());
+        assertEquals("A", futures.get(0).get());
+        assertEquals("B", futures.get(1).get());
+        assertEquals("C", futures.get(2).get());
+
+        s.shutdown();
+    }
+
+    @Test
+    void testInvokeAny() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+        List<Callable<String>> tasks = List.of(
+                new StringCallable("First", 5),
+                new StringCallable("Second", 10),
+                new StringCallable("Third", 15)
+        );
+
+        String result = s.invokeAny(tasks);
+        assertNotNull(result);
+        s.shutdown();
+    }
+
+    @Test
+    void testIsTerminated() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+        assertFalse(s.isTerminated());
+        s.execute(new TestRunnable());
+        doSleep(10);
+        s.shutdown();
+        assertTrue(s.awaitTermination(100, TimeUnit.MILLISECONDS));
+        assertTrue(s.isTerminated());
+    }
+
+    @Test
+    void testMultipleTasksExecutionOrder() throws Exception {
+        MyExecService s = MyExecService.newInstance();
+        AtomicInteger counter = new AtomicInteger(0);
+
+        for (int i = 0; i < 5; i++) {
+            final int taskId = i;
+            s.execute(() -> {
+                doSleep(5);
+                counter.incrementAndGet();
+            });
+        }
+
+        doSleep(50);
+        assertEquals(5, counter.get());
+        s.shutdown();
     }
 
     static void doSleep(int milis) {
@@ -69,7 +148,6 @@ public class ExecServiceTest {
             throw new RuntimeException(e);
         }
     }
-
 }
 
 class StringCallable implements Callable<String> {
@@ -88,6 +166,7 @@ class StringCallable implements Callable<String> {
         return result;
     }
 }
+
 class TestRunnable implements Runnable {
 
     boolean wasRun;
